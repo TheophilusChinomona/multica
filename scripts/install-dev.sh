@@ -83,35 +83,197 @@ done
 # ---------------------------------------------------------------------------
 # Prerequisites
 # ---------------------------------------------------------------------------
+detect_pkg_manager() {
+  if command_exists apt-get; then
+    echo "apt"
+  elif command_exists brew; then
+    echo "brew"
+  elif command_exists dnf; then
+    echo "dnf"
+  elif command_exists yum; then
+    echo "yum"
+  elif command_exists pacman; then
+    echo "pacman"
+  else
+    echo "unknown"
+  fi
+}
+
+install_go() {
+  local pkg_manager
+  pkg_manager=$(detect_pkg_manager)
+
+  info "Installing Go..."
+  case "$pkg_manager" in
+    apt)
+      # Ubuntu/Debian/WSL — install latest from official tarball
+      local go_version="1.24.1"
+      local go_url="https://go.dev/dl/go${go_version}.linux-amd64.tar.gz"
+      step "Downloading Go ${go_version}..."
+      curl -fsSL "$go_url" -o /tmp/go.tar.gz
+      sudo rm -rf /usr/local/go
+      sudo tar -C /usr/local -xzf /tmp/go.tar.gz
+      rm /tmp/go.tar.gz
+
+      # Add to PATH if not already there
+      if ! echo "$PATH" | tr ':' '\n' | grep -q "^/usr/local/go/bin$"; then
+        export PATH="/usr/local/go/bin:$PATH"
+        # Persist for future shells
+        local go_line='export PATH="/usr/local/go/bin:$PATH"'
+        for rc in "$HOME/.bashrc" "$HOME/.profile" "$HOME/.zshrc"; do
+          if [ -f "$rc" ] && ! grep -qF "/usr/local/go/bin" "$rc"; then
+            echo "" >> "$rc"
+            echo "# Go" >> "$rc"
+            echo "$go_line" >> "$rc"
+          fi
+        done
+      fi
+      ;;
+    brew)
+      step "Installing via Homebrew..."
+      brew install go
+      ;;
+    dnf)
+      sudo dnf install -y golang
+      ;;
+    yum)
+      sudo yum install -y golang
+      ;;
+    pacman)
+      sudo pacman -S --noconfirm go
+      ;;
+    *)
+      fail "Cannot auto-install Go. Please install manually: https://go.dev/dl/"
+      ;;
+  esac
+
+  # Verify
+  if command_exists go; then
+    ok "Go $(go version | awk '{print $3}') installed"
+  else
+    fail "Go installation failed. Please install manually: https://go.dev/dl/"
+  fi
+}
+
+install_pnpm() {
+  info "Installing pnpm..."
+  if command_exists npm; then
+    npm install -g pnpm
+  elif command_exists corepack; then
+    corepack enable
+    corepack prepare pnpm@latest --activate
+  else
+    # Official install script
+    curl -fsSL https://get.pnpm.io/install.sh | sh -
+  fi
+
+  if command_exists pnpm; then
+    ok "pnpm $(pnpm -v) installed"
+  else
+    fail "pnpm installation failed. Please install manually: npm install -g pnpm"
+  fi
+}
+
+install_node() {
+  local pkg_manager
+  pkg_manager=$(detect_pkg_manager)
+
+  info "Installing Node.js v20..."
+  case "$pkg_manager" in
+    apt)
+      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+      sudo apt-get install -y nodejs
+      ;;
+    brew)
+      brew install node@20
+      ;;
+    dnf)
+      sudo dnf install -y nodejs
+      ;;
+    yum)
+      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+      sudo yum install -y nodejs
+      ;;
+    pacman)
+      sudo pacman -S --noconfirm nodejs npm
+      ;;
+    *)
+      fail "Cannot auto-install Node.js. Please install manually: https://nodejs.org/"
+      ;;
+  esac
+
+  if command_exists node; then
+    ok "Node.js $(node -v) installed"
+  else
+    fail "Node.js installation failed. Please install manually: https://nodejs.org/"
+  fi
+}
+
+install_git() {
+  local pkg_manager
+  pkg_manager=$(detect_pkg_manager)
+
+  info "Installing Git..."
+  case "$pkg_manager" in
+    apt)    sudo apt-get install -y git ;;
+    brew)   brew install git ;;
+    dnf)    sudo dnf install -y git ;;
+    yum)    sudo yum install -y git ;;
+    pacman) sudo pacman -S --noconfirm git ;;
+    *)      fail "Cannot auto-install Git. Please install manually: https://git-scm.com/" ;;
+  esac
+
+  if command_exists git; then
+    ok "Git $(git --version | awk '{print $3}') installed"
+  fi
+}
+
 check_prerequisites() {
   info "Checking prerequisites..."
 
   local missing=()
+  local to_install=()
 
+  # Git
+  if ! command_exists git; then
+    missing+=("git")
+    to_install+=("git")
+  else
+    ok "Git $(git --version | awk '{print $3}')"
+  fi
+
+  # Node
   if ! command_exists node; then
     missing+=("node (v20+)")
+    to_install+=("node")
   else
     local node_ver
     node_ver=$(node -v | sed 's/v//' | cut -d. -f1)
     if [ "$node_ver" -lt 20 ]; then
       missing+=("node v20+ (found v$(node -v))")
+      to_install+=("node")
     else
       ok "Node.js $(node -v)"
     fi
   fi
 
+  # pnpm
   if ! command_exists pnpm; then
     missing+=("pnpm (v10.28+)")
+    to_install+=("pnpm")
   else
     ok "pnpm $(pnpm -v)"
   fi
 
+  # Go
   if ! command_exists go; then
     missing+=("go (v1.26+)")
+    to_install+=("go")
   else
     ok "Go $(go version | awk '{print $3}')"
   fi
 
+  # Docker
   if ! command_exists docker; then
     missing+=("docker")
   else
@@ -122,26 +284,76 @@ check_prerequisites() {
     fi
   fi
 
-  if ! command_exists git; then
-    missing+=("git")
-  else
-    ok "Git $(git --version | awk '{print $3}')"
+  # If nothing missing, we're done
+  if [ ${#missing[@]} -eq 0 ]; then
+    ok "All prerequisites met"
+    return 0
   fi
 
-  if [ ${#missing[@]} -gt 0 ]; then
+  # Separate auto-installable from manual
+  local auto_installable=()
+  local manual_only=()
+
+  for item in "${missing[@]}"; do
+    case "$item" in
+      docker*)
+        manual_only+=("$item")
+        ;;
+      *)
+        auto_installable+=("$item")
+        ;;
+    esac
+  done
+
+  # Show what's missing
+  echo ""
+  if [ ${#auto_installable[@]} -gt 0 ]; then
+    printf "${YELLOW}  Missing prerequisites:${RESET}\n"
+    printf "    - %s\n" "${auto_installable[@]}"
+  fi
+
+  if [ ${#manual_only[@]} -gt 0 ]; then
+    printf "${RED}  Manual install required:${RESET}\n"
+    printf "    - %s\n" "${manual_only[@]}"
+    printf "${DIM}      → https://docs.docker.com/engine/install/${RESET}\n"
+  fi
+
+  # Auto-install what we can
+  if [ ${#auto_installable[@]} -gt 0 ]; then
     echo ""
-    fail "Missing prerequisites:
-$(printf '    - %s\n' "${missing[@]}")
+    printf "${BOLD}  Installing missing prerequisites automatically...${RESET}\n"
+    echo ""
 
-  Install instructions:
-    Node.js:  https://nodejs.org/
-    pnpm:     npm install -g pnpm
-    Go:       https://go.dev/dl/
-    Docker:   https://docs.docker.com/engine/install/
-    Git:      https://git-scm.com/"
+    for item in "${to_install[@]}"; do
+      case "$item" in
+        git)   install_git ;;
+        node)  install_node ;;
+        pnpm)  install_pnpm ;;
+        go)    install_go ;;
+      esac
+    done
+
+    # Re-check after install
+    local still_missing=()
+    if ! command_exists git;   then still_missing+=("git"); fi
+    if ! command_exists node;  then still_missing+=("node"); fi
+    if ! command_exists pnpm;  then still_missing+=("pnpm"); fi
+    if ! command_exists go;    then still_missing+=("go"); fi
+    if ! command_exists docker; then still_missing+=("docker"); fi
+
+    if [ ${#still_missing[@]} -gt 0 ]; then
+      echo ""
+      fail "Still missing after install attempt: ${still_missing[*]}"
+    fi
   fi
 
-  ok "All prerequisites met"
+  # If only Docker is missing, warn but continue (Postgres can use existing)
+  if [ ${#manual_only[@]} -gt 0 ]; then
+    echo ""
+    warn "Docker not available. You'll need to provide your own Postgres instance."
+    warn "Set DATABASE_URL in .env before running 'make dev'."
+    echo ""
+  fi
 }
 
 # ---------------------------------------------------------------------------
