@@ -892,4 +892,61 @@ export class ApiClient {
   async deleteAutopilotTrigger(autopilotId: string, triggerId: string): Promise<void> {
     await this.fetch(`/api/autopilots/${autopilotId}/triggers/${triggerId}`, { method: "DELETE" });
   }
+
+  // -----------------------------------------------------------------------
+  // Workspace file system
+  // -----------------------------------------------------------------------
+
+  async getWorkspaceTree(subPath?: string): Promise<import("../types").WorkspaceTreeResponse> {
+    const params = subPath ? `?path=${encodeURIComponent(subPath)}` : "";
+    return this.fetch(`/api/workspace/tree${params}`);
+  }
+
+  async getWorkspaceFile(path: string): Promise<import("../types").WorkspaceFileResponse> {
+    return this.fetch(`/api/workspace/file?path=${encodeURIComponent(path)}`);
+  }
+
+  async getWorkspaceStats(): Promise<import("../types").WorkspaceStats> {
+    return this.fetch("/api/workspace/stats");
+  }
+
+  async searchWorkspaceFiles(query: string): Promise<import("../types").FileTreeNode[]> {
+    return this.fetch(`/api/workspace/search?q=${encodeURIComponent(query)}`);
+  }
+
+  // -----------------------------------------------------------------------
+  // PTY sessions
+  // -----------------------------------------------------------------------
+
+  async listPTYSessions(): Promise<import("../types").PTYSessionInfo[]> {
+    return this.fetch("/api/workspace/pty/sessions");
+  }
+
+  async killPTYSession(id: string): Promise<void> {
+    await this.fetch(`/api/workspace/pty/sessions/${id}`, { method: "DELETE" });
+  }
+
+  /** Returns the WebSocket URL for a PTY session. */
+  getPTYWebSocketURL(sessionId?: string, opts?: { cmd?: string; cwd?: string }): string {
+    let host: string;
+    let proto: string;
+
+    if (this.baseUrl) {
+      proto = this.baseUrl.startsWith("https") ? "wss" : "ws";
+      host = this.baseUrl.replace(/^https?:\/\//, "");
+    } else if (typeof window !== "undefined") {
+      proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      host = window.location.host;
+    } else {
+      proto = "ws:";
+      host = "localhost:8080";
+    }
+
+    const params = new URLSearchParams();
+    if (sessionId) params.set("id", sessionId);
+    if (opts?.cmd) params.set("cmd", opts.cmd);
+    if (opts?.cwd) params.set("cwd", opts.cwd);
+    const qs = params.toString();
+    return `${proto}://${host}/ws/pty${qs ? `?${qs}` : ""}`;
+  }
 }

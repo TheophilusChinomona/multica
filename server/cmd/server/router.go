@@ -118,6 +118,9 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 		realtime.HandleWebSocket(hub, mc, pr, slugResolver, w, r)
 	})
 
+	// PTY WebSocket (terminal sessions)
+	r.Get("/ws/pty", h.HandlePTYWebSocket)
+
 	// Local file serving (when using local storage)
 	if local, ok := store.(*storage.LocalStorage); ok {
 		r.Get("/uploads/*", func(w http.ResponseWriter, r *http.Request) {
@@ -353,8 +356,18 @@ func NewRouter(pool *pgxpool.Pool, hub *realtime.Hub, bus *events.Bus) chi.Route
 				})
 			})
 
-			// Tasks (user-facing, with ownership check)
-			r.Post("/api/tasks/{taskId}/cancel", h.CancelTaskByUser)
+		// Workspace file system
+		r.Get("/api/workspace/tree", h.GetWorkspaceTree)
+		r.Get("/api/workspace/file", h.GetWorkspaceFile)
+		r.Get("/api/workspace/stats", h.GetWorkspaceStats)
+		r.Get("/api/workspace/search", h.SearchWorkspaceFiles)
+
+		// PTY sessions
+		r.Get("/api/workspace/pty/sessions", h.ListPTYSessions)
+		r.Delete("/api/workspace/pty/sessions/{id}", h.KillPTYSession)
+
+		// Tasks (user-facing, with ownership check)
+		r.Post("/api/tasks/{taskId}/cancel", h.CancelTaskByUser)
 
 			r.Route("/api/chat/sessions", func(r chi.Router) {
 				r.Post("/", h.CreateChatSession)

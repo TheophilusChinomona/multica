@@ -28,6 +28,11 @@ catalog:
   # Icons
   lucide-react: "^1.0.1"
 
+  # Terminal
+  "@xterm/xterm": "^5.5.0"
+  "@xterm/addon-fit": "^0.10.0"
+  "@xterm/addon-web-links": "^0.11.0"
+
   # Testing
   vitest: "^4.1.0"
   jsdom: "^29.0.1"

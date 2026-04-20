@@ -30,6 +30,7 @@ function workspaceScoped(slug: string) {
     runtimes: () => `${ws}/runtimes`,
     skills: () => `${ws}/skills`,
     settings: () => `${ws}/settings`,
+    explorer: () => `${ws}/explorer`,
   };
 }
 

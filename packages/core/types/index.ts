@@ -55,3 +55,11 @@ export type {
   GetAutopilotResponse,
   ListAutopilotRunsResponse,
 } from "./autopilot";
+export type {
+  FileTreeNode,
+  WorkspaceTreeResponse,
+  WorkspaceFileResponse,
+  WorkspaceStats,
+  PTYSessionInfo,
+  PTYMessage,
+} from "./workspace-fs";
