@@ -106,14 +106,32 @@ install_go() {
   info "Installing Go..."
   case "$pkg_manager" in
     apt)
-      # Ubuntu/Debian/WSL — install latest from official tarball
+      # Ubuntu/Debian/WSL — install from official tarball with checksum verification
       local go_version="1.24.1"
-      local go_url="https://go.dev/dl/go${go_version}.linux-amd64.tar.gz"
+      local go_tarball="go${go_version}.linux-amd64.tar.gz"
+      local go_url="https://go.dev/dl/${go_tarball}"
+      local go_sha256="cb23b46df49e52a0ceaf0f4b1f31e8c8df4b780b9b327899c8e9839d3db4e574"
+      local tmp_dir
+      tmp_dir=$(mktemp -d)
+
       step "Downloading Go ${go_version}..."
-      curl -fsSL "$go_url" -o /tmp/go.tar.gz
-      sudo rm -rf /usr/local/go
-      sudo tar -C /usr/local -xzf /tmp/go.tar.gz
-      rm /tmp/go.tar.gz
+      curl -fsSL "$go_url" -o "$tmp_dir/$go_tarball"
+
+      # Verify checksum
+      step "Verifying checksum..."
+      local actual_sha
+      actual_sha=$(sha256sum "$tmp_dir/$go_tarball" | awk '{print $1}')
+      if [ "$actual_sha" != "$go_sha256" ]; then
+        rm -rf "$tmp_dir"
+        fail "Go tarball checksum mismatch! Expected $go_sha256, got $actual_sha"
+      fi
+
+      step "Installing to /usr/local/go..."
+      if [ -d /usr/local/go ]; then
+        sudo rm -rf /usr/local/go
+      fi
+      sudo tar -C /usr/local -xzf "$tmp_dir/$go_tarball"
+      rm -rf "$tmp_dir"
 
       # Add to PATH if not already there
       if ! echo "$PATH" | tr ':' '\n' | grep -q "^/usr/local/go/bin$"; then
@@ -163,8 +181,12 @@ install_pnpm() {
     corepack enable
     corepack prepare pnpm@latest --activate
   else
-    # Official install script
-    curl -fsSL https://get.pnpm.io/install.sh | sh -
+    # Download first, inspect, then execute — don't pipe curl to sh
+    local tmp_script
+    tmp_script=$(mktemp)
+    curl -fsSL https://get.pnpm.io/install.sh -o "$tmp_script"
+    sh "$tmp_script"
+    rm -f "$tmp_script"
   fi
 
   if command_exists pnpm; then
@@ -181,7 +203,12 @@ install_node() {
   info "Installing Node.js v20..."
   case "$pkg_manager" in
     apt)
-      curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash -
+      # Download setup script first, then execute — don't pipe curl to sudo bash
+      local tmp_script
+      tmp_script=$(mktemp)
+      curl -fsSL https://deb.nodesource.com/setup_20.x -o "$tmp_script"
+      sudo -E bash "$tmp_script"
+      rm -f "$tmp_script"
       sudo apt-get install -y nodejs
       ;;
     brew)
@@ -191,7 +218,11 @@ install_node() {
       sudo dnf install -y nodejs
       ;;
     yum)
-      curl -fsSL https://rpm.nodesource.com/setup_20.x | sudo bash -
+      local tmp_script
+      tmp_script=$(mktemp)
+      curl -fsSL https://rpm.nodesource.com/setup_20.x -o "$tmp_script"
+      sudo bash "$tmp_script"
+      rm -f "$tmp_script"
       sudo yum install -y nodejs
       ;;
     pacman)
@@ -406,24 +437,21 @@ setup_env() {
       local jwt
       jwt=$(openssl rand -hex 32)
       if [ "$(uname -s)" = "Darwin" ]; then
-        sed -i '' "s/^JWT_SECRET=.*/JWT_SECRET=$jwt/" .env
+        sed -i '' "s|^JWT_SECRET=.*|JWT_SECRET=$jwt|" .env
       else
-        sed -i "s/^JWT_SECRET=.*/JWT_SECRET=$jwt/" .env
+        sed -i "s|^JWT_SECRET=.*|JWT_SECRET=$jwt|" .env
       fi
     fi
 
     # Set ports from arguments
     if [ "$PORT" != "8080" ]; then
-      sed -i.bak "s/^PORT=.*/PORT=$PORT/" .env 2>/dev/null || true
-      rm -f .env.bak
+      sed -i "s/^PORT=.*/PORT=$PORT/" .env
     fi
     if [ "$FRONTEND_PORT" != "3000" ]; then
-      sed -i.bak "s/^FRONTEND_PORT=.*/FRONTEND_PORT=$FRONTEND_PORT/" .env 2>/dev/null || true
-      rm -f .env.bak
+      sed -i "s/^FRONTEND_PORT=.*/FRONTEND_PORT=$FRONTEND_PORT/" .env
     fi
     if [ "$POSTGRES_PORT" != "5432" ]; then
-      sed -i.bak "s/^POSTGRES_PORT=.*/POSTGRES_PORT=$POSTGRES_PORT/" .env 2>/dev/null || true
-      rm -f .env.bak
+      sed -i "s/^POSTGRES_PORT=.*/POSTGRES_PORT=$POSTGRES_PORT/" .env
     fi
 
     ok "Created .env with random JWT_SECRET"
