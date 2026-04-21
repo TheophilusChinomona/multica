@@ -498,6 +498,14 @@ start_services() {
   step "Frontend: http://localhost:$FRONTEND_PORT"
   echo ""
 
+  # Load .env so Go server picks up JWT_SECRET and other vars
+  if [ -f .env ]; then
+    set -a
+    # shellcheck source=/dev/null
+    source .env
+    set +a
+  fi
+
   # Run in background and show logs
   trap 'kill 0' EXIT
   (cd server && go run ./cmd/server) &

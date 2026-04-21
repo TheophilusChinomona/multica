@@ -935,10 +935,10 @@ export class ApiClient {
       proto = this.baseUrl.startsWith("https") ? "wss" : "ws";
       host = this.baseUrl.replace(/^https?:\/\//, "");
     } else if (typeof window !== "undefined") {
-      proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+      proto = window.location.protocol === "https:" ? "wss" : "ws";
       host = window.location.host;
     } else {
-      proto = "ws:";
+      proto = "ws";
       host = "localhost:8080";
     }
 
