@@ -1,9 +1,10 @@
 "use client";
 
 import { useState, useRef } from "react";
-import { ChevronRight, Maximize2, Minimize2, X as XIcon, UserMinus } from "lucide-react";
+import { ChevronRight, FolderGit, Maximize2, Minimize2, X as XIcon, UserMinus } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { useCreateProject } from "@multica/core/projects/mutations";
+import { useProjectDraftStore } from "@multica/core/projects";
 import {
   PROJECT_STATUS_CONFIG,
   PROJECT_STATUS_ORDER,
@@ -63,16 +64,37 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
   const { data: agents = [] } = useQuery(agentListOptions(wsId));
   const { getActorName } = useActorName();
 
-  const [title, setTitle] = useState("");
+  const draft = useProjectDraftStore((s) => s.draft);
+  const setDraft = useProjectDraftStore((s) => s.setDraft);
+  const clearDraft = useProjectDraftStore((s) => s.clearDraft);
+
+  const [title, setTitle] = useState(draft.title);
   const descEditorRef = useRef<ContentEditorRef>(null);
-  const [status, setStatus] = useState<ProjectStatus>("planned");
-  const [priority, setPriority] = useState<ProjectPriority>("none");
-  const [leadType, setLeadType] = useState<"member" | "agent" | undefined>();
-  const [leadId, setLeadId] = useState<string | undefined>();
-  const [icon, setIcon] = useState<string | undefined>();
+  const [status, setStatus] = useState<ProjectStatus>(draft.status);
+  const [priority, setPriority] = useState<ProjectPriority>(draft.priority);
+  const [leadType, setLeadType] = useState<"member" | "agent" | undefined>(draft.leadType);
+  const [leadId, setLeadId] = useState<string | undefined>(draft.leadId);
+  const [icon, setIcon] = useState<string | undefined>(draft.icon);
   const [iconPickerOpen, setIconPickerOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
+  // Repos selected to attach as github_repo resources after the project is
+  // created. Stored as URLs (not full ProjectResource rows) — they're not
+  // persisted until handleSubmit fires the createProjectResource calls.
+  const [selectedRepos, setSelectedRepos] = useState<string[]>([]);
+  const [repoPopoverOpen, setRepoPopoverOpen] = useState(false);
+  const [customRepoUrl, setCustomRepoUrl] = useState("");
+  const workspaceRepos = workspace?.repos ?? [];
+
+  // Sync field changes to draft store
+  const updateTitle = (v: string) => { setTitle(v); setDraft({ title: v }); };
+  const updateStatus = (v: ProjectStatus) => { setStatus(v); setDraft({ status: v }); };
+  const updatePriority = (v: ProjectPriority) => { setPriority(v); setDraft({ priority: v }); };
+  const updateLead = (type?: "member" | "agent", id?: string) => {
+    setLeadType(type); setLeadId(id);
+    setDraft({ leadType: type, leadId: id });
+  };
+  const updateIcon = (v: string | undefined) => { setIcon(v); setDraft({ icon: v }); };
 
   const [leadOpen, setLeadOpen] = useState(false);
   const [leadFilter, setLeadFilter] = useState("");
@@ -99,7 +121,16 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
         priority,
         lead_type: leadType,
         lead_id: leadId,
+        // Server attaches these in the same transaction as the project.
+        resources:
+          selectedRepos.length > 0
+            ? selectedRepos.map((url) => ({
+                resource_type: "github_repo" as const,
+                resource_ref: { url },
+              }))
+            : undefined,
       });
+      clearDraft();
       onClose();
       toast.success("Project created");
       router.push(wsPaths.projectDetail(project.id));
@@ -108,6 +139,19 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const toggleRepo = (url: string) => {
+    setSelectedRepos((prev) =>
+      prev.includes(url) ? prev.filter((u) => u !== url) : [...prev, url],
+    );
+  };
+
+  const addCustomRepo = () => {
+    const url = customRepoUrl.trim();
+    if (!url) return;
+    setSelectedRepos((prev) => (prev.includes(url) ? prev : [...prev, url]));
+    setCustomRepoUrl("");
   };
 
   return (
@@ -177,7 +221,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
             <PopoverContent align="start" className="w-auto p-0">
               <EmojiPicker
                 onSelect={(emoji) => {
-                  setIcon(emoji);
+                  updateIcon(emoji);
                   setIconPickerOpen(false);
                 }}
               />
@@ -185,10 +229,10 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
           </Popover>
           <TitleEditor
             autoFocus
-            defaultValue=""
+            defaultValue={draft.title}
             placeholder="Project title"
             className="text-lg font-semibold"
-            onChange={(v) => setTitle(v)}
+            onChange={(v) => updateTitle(v)}
             onSubmit={handleSubmit}
           />
         </div>
@@ -196,8 +240,9 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
         <div className="flex-1 min-h-0 overflow-y-auto px-5">
           <ContentEditor
             ref={descEditorRef}
-            defaultValue=""
+            defaultValue={draft.description}
             placeholder="Add description..."
+            onUpdate={(md) => setDraft({ description: md })}
             debounceMs={500}
           />
         </div>
@@ -214,7 +259,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
             />
             <DropdownMenuContent align="start" className="w-44">
               {PROJECT_STATUS_ORDER.map((s) => (
-                <DropdownMenuItem key={s} onClick={() => setStatus(s)}>
+                <DropdownMenuItem key={s} onClick={() => updateStatus(s)}>
                   <span className={cn("size-2 rounded-full", PROJECT_STATUS_CONFIG[s].dotColor)} />
                   <span>{PROJECT_STATUS_CONFIG[s].label}</span>
                 </DropdownMenuItem>
@@ -233,7 +278,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
             />
             <DropdownMenuContent align="start" className="w-44">
               {PROJECT_PRIORITY_ORDER.map((pr) => (
-                <DropdownMenuItem key={pr} onClick={() => setPriority(pr)}>
+                <DropdownMenuItem key={pr} onClick={() => updatePriority(pr)}>
                   <PriorityIcon priority={pr} />
                   <span>{PROJECT_PRIORITY_CONFIG[pr].label}</span>
                 </DropdownMenuItem>
@@ -253,7 +298,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 <PillButton>
                   {leadType && leadId ? (
                     <>
-                      <ActorAvatar actorType={leadType} actorId={leadId} size={16} />
+                      <ActorAvatar actorType={leadType} actorId={leadId} size={16} showStatusDot />
                       <span>{leadLabel}</span>
                     </>
                   ) : (
@@ -276,8 +321,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                 <button
                   type="button"
                   onClick={() => {
-                    setLeadType(undefined);
-                    setLeadId(undefined);
+                    updateLead(undefined, undefined);
                     setLeadOpen(false);
                   }}
                   className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
@@ -295,8 +339,7 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                         type="button"
                         key={m.user_id}
                         onClick={() => {
-                          setLeadType("member");
-                          setLeadId(m.user_id);
+                          updateLead("member", m.user_id);
                           setLeadOpen(false);
                         }}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
@@ -317,13 +360,12 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                         type="button"
                         key={a.id}
                         onClick={() => {
-                          setLeadType("agent");
-                          setLeadId(a.id);
+                          updateLead("agent", a.id);
                           setLeadOpen(false);
                         }}
                         className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent transition-colors"
                       >
-                        <ActorAvatar actorType="agent" actorId={a.id} size={16} />
+                        <ActorAvatar actorType="agent" actorId={a.id} size={16} showStatusDot />
                         <span>{a.name}</span>
                       </button>
                     ))}
@@ -337,6 +379,105 @@ export function CreateProjectModal({ onClose }: { onClose: () => void }) {
                     </div>
                   )}
               </div>
+            </PopoverContent>
+          </Popover>
+
+          <Popover open={repoPopoverOpen} onOpenChange={setRepoPopoverOpen}>
+            <PopoverTrigger
+              render={
+                <PillButton>
+                  <FolderGit className="size-3" />
+                  <span>
+                    {selectedRepos.length === 0
+                      ? "Repos"
+                      : `${selectedRepos.length} repo${selectedRepos.length === 1 ? "" : "s"}`}
+                  </span>
+                </PillButton>
+              }
+            />
+            <PopoverContent align="start" className="w-72 p-2 space-y-2">
+              <div className="text-xs font-medium text-muted-foreground">
+                Attach GitHub repos to this project
+              </div>
+              {workspaceRepos.length > 0 ? (
+                <div className="space-y-1">
+                  {workspaceRepos.map((repo) => {
+                    const checked = selectedRepos.includes(repo.url);
+                    return (
+                      <button
+                        type="button"
+                        key={repo.url}
+                        onClick={() => toggleRepo(repo.url)}
+                        className={cn(
+                          "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-xs hover:bg-accent transition-colors",
+                          checked && "bg-accent",
+                        )}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          readOnly
+                          className="size-3.5"
+                        />
+                        <FolderGit className="size-3.5" />
+                        <span className="truncate flex-1 text-left">{repo.url}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-xs text-muted-foreground">
+                  No workspace-level repos yet. Paste a URL below to attach one
+                  ad-hoc.
+                </p>
+              )}
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  addCustomRepo();
+                }}
+                className="flex items-center gap-1.5 pt-1 border-t"
+              >
+                <input
+                  type="url"
+                  value={customRepoUrl}
+                  onChange={(e) => setCustomRepoUrl(e.target.value)}
+                  placeholder="https://github.com/owner/repo"
+                  className="flex-1 bg-transparent text-xs px-2 py-1 outline-none placeholder:text-muted-foreground"
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  variant="ghost"
+                  className="h-6 px-2 text-xs"
+                  disabled={!customRepoUrl.trim()}
+                >
+                  Add
+                </Button>
+              </form>
+              {selectedRepos.length > 0 && (
+                <div className="space-y-1 pt-1 border-t">
+                  <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wider">
+                    Selected
+                  </div>
+                  {selectedRepos.map((url) => (
+                    <div
+                      key={url}
+                      className="flex items-center gap-2 text-xs"
+                    >
+                      <FolderGit className="size-3 text-muted-foreground" />
+                      <span className="truncate flex-1">{url}</span>
+                      <button
+                        type="button"
+                        onClick={() => toggleRepo(url)}
+                        className="text-muted-foreground hover:text-foreground"
+                      >
+                        <XIcon className="size-3" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
             </PopoverContent>
           </Popover>
         </div>

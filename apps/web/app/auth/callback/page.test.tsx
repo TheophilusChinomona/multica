@@ -10,6 +10,18 @@ const { mockPush, mockSearchParams, mockLoginWithGoogle, mockListWorkspaces } =
     mockListWorkspaces: vi.fn(),
   }));
 
+const makeUser = (overrides: Partial<{ onboarded_at: string | null }> = {}) => ({
+  id: "user-1",
+  name: "Test",
+  email: "test@multica.ai",
+  avatar_url: null,
+  onboarded_at: null,
+  onboarding_questionnaire: {},
+  created_at: "2026-01-01T00:00:00Z",
+  updated_at: "2026-01-01T00:00:00Z",
+  ...overrides,
+});
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: mockPush }),
   useSearchParams: () => mockSearchParams,
@@ -49,32 +61,72 @@ import CallbackPage from "./page";
 describe("CallbackPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mockSearchParams.forEach((_v, k) => mockSearchParams.delete(k));
+    // Snapshot keys before deleting — forEach + delete skips entries because
+    // the iteration index advances while the underlying list shrinks.
+    Array.from(mockSearchParams.keys()).forEach((k) =>
+      mockSearchParams.delete(k),
+    );
     mockSearchParams.set("code", "test-code");
-    mockLoginWithGoogle.mockResolvedValue(undefined);
+    mockLoginWithGoogle.mockResolvedValue(makeUser());
     mockListWorkspaces.mockResolvedValue([]);
   });
 
-  it("falls back to paths.newWorkspace() when no next= is present and the user has no workspace", async () => {
+  it("unonboarded user honors a safe next= (e.g. /invite/{id}) so invitees aren't trapped", async () => {
+    mockSearchParams.set("state", "next:/invite/abc123");
     render(<CallbackPage />);
-
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith(paths.newWorkspace());
+      expect(mockPush).toHaveBeenCalledWith("/invite/abc123");
+    });
+    expect(mockPush).not.toHaveBeenCalledWith(paths.onboarding());
+  });
+
+  it("unonboarded user with no next= and zero workspaces lands on /onboarding", async () => {
+    render(<CallbackPage />);
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(paths.onboarding());
     });
   });
 
-  it("ignores unsafe next= targets from the OAuth state and still lands on the default destination", async () => {
+  it("unonboarded user with existing workspace lands in that workspace, not /onboarding", async () => {
+    mockListWorkspaces.mockResolvedValue([
+      {
+        id: "ws-1",
+        name: "Acme",
+        slug: "acme",
+        description: null,
+        context: null,
+        settings: {},
+        repos: [],
+        issue_prefix: "ACME",
+        created_at: "",
+        updated_at: "",
+      },
+    ]);
+    render(<CallbackPage />);
+    await waitFor(() => {
+      expect(mockPush).toHaveBeenCalledWith(paths.workspace("acme").issues());
+    });
+    expect(mockPush).not.toHaveBeenCalledWith(paths.onboarding());
+  });
+
+  it("onboarded user ignores unsafe next= targets and lands on the default destination", async () => {
+    mockLoginWithGoogle.mockResolvedValue(
+      makeUser({ onboarded_at: "2026-01-01T00:00:00Z" }),
+    );
     mockSearchParams.set("state", "next:https://evil.example");
 
     render(<CallbackPage />);
 
     await waitFor(() => {
-      expect(mockPush).toHaveBeenCalledWith(paths.newWorkspace());
+      expect(mockPush).toHaveBeenCalled();
     });
     expect(mockPush).not.toHaveBeenCalledWith("https://evil.example");
   });
 
-  it("honors a safe next= target (e.g. /invite/{id})", async () => {
+  it("onboarded user honors a safe next= target (e.g. /invite/{id})", async () => {
+    mockLoginWithGoogle.mockResolvedValue(
+      makeUser({ onboarded_at: "2026-01-01T00:00:00Z" }),
+    );
     mockSearchParams.set("state", "next:/invite/abc123");
 
     render(<CallbackPage />);
