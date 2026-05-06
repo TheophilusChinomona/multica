@@ -178,6 +178,7 @@ type ChatSession struct {
 	CreatedAt   pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt   pgtype.Timestamptz `json:"updated_at"`
 	UnreadSince pgtype.Timestamptz `json:"unread_since"`
+	RuntimeID   pgtype.UUID        `json:"runtime_id"`
 }
 
 type Comment struct {
@@ -435,6 +436,7 @@ type User struct {
 	CloudWaitlistEmail      pgtype.Text        `json:"cloud_waitlist_email"`
 	CloudWaitlistReason     pgtype.Text        `json:"cloud_waitlist_reason"`
 	StarterContentState     pgtype.Text        `json:"starter_content_state"`
+	Language                pgtype.Text        `json:"language"`
 }
 
 type VerificationCode struct {

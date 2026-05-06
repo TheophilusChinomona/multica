@@ -5,11 +5,11 @@ import react from "@vitejs/plugin-react";
 import tailwindcss from "@tailwindcss/vite";
 
 export default defineConfig(({ mode, command }) => {
-  // Self-host fork guard: production builds must not ship with the
-  // committed (blank) .env.production. The renderer bundle inlines
-  // these URLs at build time, so an empty value would compile in a
-  // dead endpoint that talks to nothing. Fail loudly here instead of
-  // shipping a broken artifact. Override via apps/desktop/.env.production.local.
+  // Self-host fork guard: production builds must declare their own
+  // backend URLs via apps/desktop/.env.production.local (gitignored).
+  // Upstream's runtime-config-loader handles the runtime case; this
+  // guard is a belt-and-braces check at build time so a release artifact
+  // can't ship without explicit self-host endpoints configured.
   if (command === "build" && mode === "production") {
     const env = loadEnv(mode, __dirname, "VITE_");
     const required = ["VITE_API_URL", "VITE_WS_URL", "VITE_APP_URL"];
@@ -19,10 +19,8 @@ export default defineConfig(({ mode, command }) => {
         [
           `desktop build refused: missing ${missing.join(", ")}.`,
           ``,
-          `This is a self-hosting fork; apps/desktop/.env.production is`,
-          `intentionally blank so builds can't ship pointing at multica.ai.`,
-          ``,
-          `Provide overrides in apps/desktop/.env.production.local (gitignored):`,
+          `This is a self-hosting fork. Provide overrides in`,
+          `apps/desktop/.env.production.local (gitignored):`,
           ``,
           `  VITE_API_URL=https://api.example.com`,
           `  VITE_WS_URL=wss://api.example.com/ws`,

@@ -2,6 +2,7 @@ package execenv
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -12,6 +13,10 @@ import (
 
 func testLogger() *slog.Logger {
 	return slog.Default()
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
 func TestShortID(t *testing.T) {
@@ -28,6 +33,24 @@ func TestShortID(t *testing.T) {
 		if got := shortID(tt.input); got != tt.want {
 			t.Errorf("shortID(%q) = %q, want %q", tt.input, got, tt.want)
 		}
+	}
+}
+
+func TestPredictRootDir(t *testing.T) {
+	t.Parallel()
+	got := PredictRootDir("/root", "ws-uuid", "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
+	want := filepath.Join("/root", "ws-uuid", "a1b2c3d4")
+	if got != want {
+		t.Errorf("PredictRootDir = %q, want %q", got, want)
+	}
+	if got := PredictRootDir("", "ws", "task"); got != "" {
+		t.Errorf("expected empty when workspaces root missing, got %q", got)
+	}
+	if got := PredictRootDir("/r", "", "task"); got != "" {
+		t.Errorf("expected empty when workspace ID missing, got %q", got)
+	}
+	if got := PredictRootDir("/r", "ws", ""); got != "" {
+		t.Errorf("expected empty when task ID missing, got %q", got)
 	}
 }
 
@@ -217,7 +240,7 @@ func TestProjectReposReplaceWorkspaceReposInMetaSkill(t *testing.T) {
 		ProjectID:    "22222222-3333-4444-5555-666666666666",
 		ProjectTitle: "Project A",
 		Repos: []RepoContextForEnv{
-			{URL: "https://github.com/org/project-repo", Description: ""},
+			{URL: "https://github.com/org/project-repo"},
 		},
 		ProjectResources: []ProjectResourceForEnv{
 			{
@@ -261,8 +284,8 @@ func TestPrepareWithRepoContext(t *testing.T) {
 	taskCtx := TaskContextForEnv{
 		IssueID: "b2c3d4e5-f6a7-8901-bcde-f12345678901",
 		Repos: []RepoContextForEnv{
-			{URL: "https://github.com/org/backend", Description: "Go backend"},
-			{URL: "https://github.com/org/frontend", Description: "React frontend"},
+			{URL: "https://github.com/org/backend"},
+			{URL: "https://github.com/org/frontend"},
 		},
 	}
 	env, err := Prepare(PrepareParams{
@@ -304,9 +327,7 @@ func TestPrepareWithRepoContext(t *testing.T) {
 	for _, want := range []string{
 		"multica repo checkout",
 		"https://github.com/org/backend",
-		"Go backend",
 		"https://github.com/org/frontend",
-		"React frontend",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("CLAUDE.md missing %q", want)
@@ -724,17 +745,17 @@ func TestWriteContextFilesOpencodeNativeSkills(t *testing.T) {
 		t.Fatalf("writeContextFiles failed: %v", err)
 	}
 
-	// Skills should be in .config/opencode/skills/ (native discovery).
-	skillMd, err := os.ReadFile(filepath.Join(dir, ".config", "opencode", "skills", "go-conventions", "SKILL.md"))
+	// Skills should be in .opencode/skills/ (native discovery).
+	skillMd, err := os.ReadFile(filepath.Join(dir, ".opencode", "skills", "go-conventions", "SKILL.md"))
 	if err != nil {
-		t.Fatalf("failed to read .config/opencode/skills/go-conventions/SKILL.md: %v", err)
+		t.Fatalf("failed to read .opencode/skills/go-conventions/SKILL.md: %v", err)
 	}
 	if !strings.Contains(string(skillMd), "Follow Go conventions.") {
 		t.Error("SKILL.md missing content")
 	}
 
-	// Supporting files should also be under .config/opencode/skills/.
-	supportFile, err := os.ReadFile(filepath.Join(dir, ".config", "opencode", "skills", "go-conventions", "templates", "example.go"))
+	// Supporting files should also be under .opencode/skills/.
+	supportFile, err := os.ReadFile(filepath.Join(dir, ".opencode", "skills", "go-conventions", "templates", "example.go"))
 	if err != nil {
 		t.Fatalf("failed to read supporting file: %v", err)
 	}
@@ -853,7 +874,7 @@ func TestPrepareWithRepoContextOpencode(t *testing.T) {
 	taskCtx := TaskContextForEnv{
 		IssueID: "c3d4e5f6-a7b8-9012-cdef-123456789012",
 		Repos: []RepoContextForEnv{
-			{URL: "https://github.com/org/backend", Description: "Go backend"},
+			{URL: "https://github.com/org/backend"},
 		},
 	}
 	env, err := Prepare(PrepareParams{
@@ -894,7 +915,6 @@ func TestPrepareWithRepoContextOpencode(t *testing.T) {
 	for _, want := range []string{
 		"multica repo checkout",
 		"https://github.com/org/backend",
-		"Go backend",
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("AGENTS.md missing %q", want)
@@ -1357,6 +1377,51 @@ func TestPrepareCodexHomeSkipsMissingFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(codexHome, "plugins", "cache")); err != nil {
 		t.Fatalf("missing shared plugin cache exposure should still be tolerated and created: %v", err)
+	}
+}
+
+// Regression for issue #2081: when the per-task auth.json is a stale regular
+// file (e.g. left behind from an earlier Windows copy fallback), a subsequent
+// Reuse() / prepareCodexHome must refresh it from the shared source rather
+// than preserve the stale copy. Without this, Codex would keep retrying with
+// a refresh token the OAuth server has already revoked, surfacing as
+// `refresh_token_reused` / `token_expired` until the user manually nukes the
+// workspace directory.
+func TestPrepareCodexHome_RefreshesStaleAuthCopyOnReuse(t *testing.T) {
+	// Cannot use t.Parallel() with t.Setenv.
+
+	sharedHome := t.TempDir()
+	os.WriteFile(filepath.Join(sharedHome, "auth.json"), []byte(`{"refresh_token":"v1"}`), 0o644)
+	t.Setenv("CODEX_HOME", sharedHome)
+
+	codexHome := filepath.Join(t.TempDir(), "codex-home")
+
+	// Pre-seed the per-task home with a stale regular-file auth.json,
+	// simulating a previous run where os.Symlink failed and createFileLink
+	// fell back to copying.
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatalf("mkdir codex-home: %v", err)
+	}
+	stalePath := filepath.Join(codexHome, "auth.json")
+	if err := os.WriteFile(stalePath, []byte(`{"refresh_token":"v0_stale"}`), 0o644); err != nil {
+		t.Fatalf("seed stale auth: %v", err)
+	}
+
+	// Shared source rotates to v2 while the per-task copy is still stuck on v0.
+	os.WriteFile(filepath.Join(sharedHome, "auth.json"), []byte(`{"refresh_token":"v2"}`), 0o644)
+
+	if err := prepareCodexHome(codexHome, testLogger()); err != nil {
+		t.Fatalf("prepareCodexHome failed: %v", err)
+	}
+
+	// After Reuse, dst should mirror the current shared source — either as a
+	// fresh symlink (preferred) or as a fresh copy (Windows fallback).
+	data, err := os.ReadFile(stalePath)
+	if err != nil {
+		t.Fatalf("read auth.json: %v", err)
+	}
+	if string(data) != `{"refresh_token":"v2"}` {
+		t.Errorf("auth.json content = %q, want refreshed v2 contents", data)
 	}
 }
 
@@ -1901,7 +1966,7 @@ func TestWriteReadGCMeta(t *testing.T) {
 	issueID := "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 	wsID := "ws-test-001"
 
-	if err := WriteGCMeta(dir, issueID, wsID); err != nil {
+	if err := WriteGCMeta(dir, issueID, wsID, discardLogger()); err != nil {
 		t.Fatalf("WriteGCMeta: %v", err)
 	}
 
@@ -1923,8 +1988,20 @@ func TestWriteReadGCMeta(t *testing.T) {
 
 func TestWriteGCMeta_EmptyRoot(t *testing.T) {
 	t.Parallel()
-	if err := WriteGCMeta("", "issue", "ws"); err != nil {
+	if err := WriteGCMeta("", "issue", "ws", discardLogger()); err != nil {
 		t.Fatalf("expected nil for empty root, got %v", err)
+	}
+}
+
+func TestWriteGCMeta_EmptyIssueID(t *testing.T) {
+	t.Parallel()
+	dir := t.TempDir()
+
+	if err := WriteGCMeta(dir, "", "ws", discardLogger()); err != nil {
+		t.Fatalf("expected nil for empty issue ID, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, gcMetaFile)); !os.IsNotExist(err) {
+		t.Fatalf("expected gc meta file to be absent, got err=%v", err)
 	}
 }
 

@@ -14,8 +14,7 @@ import (
 
 // RepoContextForEnv describes a workspace repo available for checkout.
 type RepoContextForEnv struct {
-	URL         string // remote URL
-	Description string // human-readable description
+	URL string // remote URL
 }
 
 // ProjectResourceForEnv describes a single resource attached to the issue's
@@ -54,7 +53,7 @@ type TaskContextForEnv struct {
 	ProjectTitle            string                  // human-readable project title
 	ProjectResources        []ProjectResourceForEnv // resources attached to the project
 	ChatSessionID           string                  // non-empty for chat tasks
-	AutopilotRunID          string              // non-empty for autopilot run_only tasks
+	AutopilotRunID          string                  // non-empty for autopilot run_only tasks
 	AutopilotID             string
 	AutopilotTitle          string
 	AutopilotDescription    string
@@ -86,6 +85,16 @@ type Environment struct {
 	CodexHome string
 
 	logger *slog.Logger // for cleanup logging
+}
+
+// PredictRootDir returns the env root path that Prepare would create for the
+// given task, without performing any I/O. Callers use this to claim ownership
+// of the directory (e.g. against the GC loop) before Prepare/Reuse runs.
+func PredictRootDir(workspacesRoot, workspaceID, taskID string) string {
+	if workspacesRoot == "" || workspaceID == "" || taskID == "" {
+		return ""
+	}
+	return filepath.Join(workspacesRoot, workspaceID, shortID(taskID))
 }
 
 // Prepare creates an isolated execution environment for a task.
@@ -205,7 +214,11 @@ type GCMeta struct {
 const gcMetaFile = ".gc_meta.json"
 
 // WriteGCMeta writes GC metadata into the given directory.
-func WriteGCMeta(envRoot, issueID, workspaceID string) error {
+func WriteGCMeta(envRoot, issueID, workspaceID string, logger *slog.Logger) error {
+	if issueID == "" {
+		logger.Warn("execenv: skipping .gc_meta.json write: issue_id is empty", "envRoot", envRoot, "workspaceID", workspaceID)
+		return nil
+	}
 	if envRoot == "" {
 		return nil
 	}

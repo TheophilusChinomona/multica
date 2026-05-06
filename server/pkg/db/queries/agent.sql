@@ -157,6 +157,17 @@ SET status = 'cancelled', completed_at = now()
 WHERE trigger_comment_id = $1 AND status IN ('queued', 'dispatched', 'running')
 RETURNING *;
 
+-- name: CancelAgentTasksByChatSession :many
+-- Cancels active tasks belonging to a chat session. Called from
+-- DeleteChatSession so the daemon doesn't keep running work whose result
+-- has nowhere to land. Must run BEFORE the chat_session row is deleted —
+-- the FK ON DELETE SET NULL would otherwise nullify chat_session_id and we
+-- could no longer reach those tasks.
+UPDATE agent_task_queue
+SET status = 'cancelled', completed_at = now()
+WHERE chat_session_id = $1 AND status IN ('queued', 'dispatched', 'running')
+RETURNING *;
+
 -- name: GetAgentTask :one
 SELECT * FROM agent_task_queue
 WHERE id = $1;
@@ -225,7 +236,7 @@ RETURNING *;
 -- a rerun does not inherit the bad session. The daemon classifies these
 -- failures (iteration_limit, agent_fallback_message) when it detects the
 -- agent emitted a fallback marker instead of a real result.
-SELECT session_id, work_dir FROM agent_task_queue
+SELECT session_id, work_dir, runtime_id FROM agent_task_queue
 WHERE agent_id = $1 AND issue_id = $2
   AND (
     status = 'completed'
@@ -321,6 +332,19 @@ WHERE issue_id = $1 AND agent_id = $2 AND status IN ('queued', 'dispatched');
 -- name: ListPendingTasksByRuntime :many
 SELECT * FROM agent_task_queue
 WHERE runtime_id = $1 AND status IN ('queued', 'dispatched')
+ORDER BY priority DESC, created_at ASC;
+
+-- name: ListQueuedClaimCandidatesByRuntime :many
+-- Returns rows the runtime can attempt to claim. Status is restricted to
+-- 'queued' (in contrast to ListPendingTasksByRuntime which also includes
+-- 'dispatched') because dispatched rows are by definition already owned
+-- and cannot be re-claimed — including them in the candidate list pads
+-- the result with rows that always lose the per-(issue, agent) race in
+-- ClaimAgentTask, wasting CPU and a SELECT every poll cycle when the
+-- runtime is busy on a long-running task. Backed by the partial index
+-- idx_agent_task_queue_claim_candidates so the warm path is cheap.
+SELECT * FROM agent_task_queue
+WHERE runtime_id = $1 AND status = 'queued'
 ORDER BY priority DESC, created_at ASC;
 
 -- name: ListActiveTasksByIssue :many
